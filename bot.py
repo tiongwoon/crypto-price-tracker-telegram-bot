@@ -150,12 +150,14 @@ class PriceTracker:
                                     time_str = escape_markdown(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                                     
                                     message = (
-                                        f"*Price: {price_str} {percentage_str} FDV: {fdv_str} Vol 5m: {vol_5m_str}*\n\n"
-                                        f"Track Start Price: ${initial_price_str} FDV: {initial_fdv_str}\n"
-                                        f"Token: {token_name_str}\n"
-                                        f"Contract: `{contract_str}`\n"
-                                        #f"Time: {time_str}\n"
-                                        f"[View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})"
+                                        f"*{token_name_str}*\n"
+                                        f"💵 *Price: ${price_str} {percentage_str}*\n"
+                                        f"🚀 *FDV: {fdv_str}*\n"
+                                        f"🌊 *Vol 5m: {vol_5m_str}*\n\n"
+                                        f"⏰ *Track Start Price: ${initial_price_str}*\n"
+                                        f"*FDV: {initial_fdv_str}*\n\n"
+                                        f"✉️ *Contract:* `{contract_str}`\n\n"
+                                        f"📈 [View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})\n"
                                     )
                                     await context.bot.send_message(
                                         chat_id=chat_id, 
@@ -174,13 +176,15 @@ class PriceTracker:
                                     time_str = escape_markdown(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                                     
                                     message = (
-                                        f"*Price: {price_str} {price_percentage_5m}% FDV: {fdv_str} Vol 5m: {vol_5m_str}*\n\n"
-                                        f"Track Start Price: ${initial_price_str} FDV: {initial_fdv_str}\n"
-                                        #f"Network: {network_str}\n"
-                                        f"Token: {token_name_str}\n"
-                                        f"Contract: `{contract_str}`\n"
-                                        #f"Time: {time_str}"
-                                        f"[View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})"
+                                        f"*{token_name_str}*\n"
+                                        f"💵 *Price: {price_str} {percentage_str}*\n"
+                                        f"🚀 *FDV: {fdv_str}*\n"
+                                        f"🌊 *Vol 5m: {vol_5m_str}*\n\n"
+                                        f"⏰ *Track Start Price: ${initial_price_str}*\n"
+                                        f"*FDV: {initial_fdv_str}*\n\n"
+                                        f"✉️ *Contract:* `{contract_str}`\n\n"
+                                        f"📈 [View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})\n"
+                                        
                                     )
                                     await context.bot.send_message(
                                         chat_id=chat_id, 
