@@ -151,10 +151,11 @@ class PriceTracker:
                                     
                                     message = (
                                         f"*Price: {price_str} {percentage_str} FDV: {fdv_str} Vol 5m: {vol_5m_str}*\n\n"
-                                        f"Track Start Price: ${initial_price_str} \\| FDV: {initial_fdv_str}\n"
+                                        f"Track Start Price: ${initial_price_str} FDV: {initial_fdv_str}\n"
                                         f"Token: {token_name_str}\n"
                                         f"Contract: `{contract_str}`\n"
-                                        f"[GT Link](https://www.geckoterminal.com/{network}/pools/{contract_address})"
+                                        #f"Time: {time_str}\n"
+                                        f"[View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})"
                                     )
                                     await context.bot.send_message(
                                         chat_id=chat_id, 
@@ -179,7 +180,7 @@ class PriceTracker:
                                         f"Token: {token_name_str}\n"
                                         f"Contract: `{contract_str}`\n"
                                         #f"Time: {time_str}"
-                                        f"[GT Link](https://www.geckoterminal.com/{network}/pools/{contract_address})"
+                                        f"[View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})"
                                     )
                                     await context.bot.send_message(
                                         chat_id=chat_id, 
