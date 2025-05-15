@@ -4,7 +4,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import aiohttp
-from typing import Dict
+from typing import Dict, List
 from dotenv import load_dotenv
 from telegram import BotCommandScopeDefault
 
@@ -44,35 +44,85 @@ def escape_markdown(text: str) -> str:
 
 class PriceTracker:
     def __init__(self):
-        self.active_trackers: Dict[int, tuple] = {}  # chat_id -> (network, contract_address)
-        self.tasks: Dict[int, asyncio.Task] = {}  # chat_id -> task
-        self.initial_prices: Dict[int, float] = {}  # chat_id -> initial_price
-        self.initial_fdv: Dict[int, float] = {}  # chat_id -> initial_fdv
+        self.active_trackers: Dict[int, List[tuple]] = {}  # chat_id -> [(network, contract_address), ...]
+        self.tasks: Dict[int, List[asyncio.Task]] = {}  # chat_id -> [task1, task2, ...]
+        self.initial_prices: Dict[int, Dict[str, float]] = {}  # chat_id -> {contract_address: initial_price}
+        self.initial_fdv: Dict[int, Dict[str, float]] = {}  # chat_id -> {contract_address: initial_fdv}
+        self.alert_intervals: Dict[int, Dict[str, int]] = {}  # chat_id -> {contract_address: interval_minutes}
 
-    async def start_tracking(self, chat_id: int, network: str, contract_address: str, context: ContextTypes.DEFAULT_TYPE):
-        if chat_id in self.active_trackers:
+    async def start_tracking(self, chat_id: int, network: str, contract_address: str, interval: int, context: ContextTypes.DEFAULT_TYPE):
+        # Initialize user's tracking data if not exists
+        if chat_id not in self.active_trackers:
+            self.active_trackers[chat_id] = []
+            self.tasks[chat_id] = []
+            self.initial_prices[chat_id] = {}
+            self.initial_fdv[chat_id] = {}
+            self.alert_intervals[chat_id] = {}
+
+        # Check for duplicate token
+        if any(addr == contract_address for _, addr in self.active_trackers[chat_id]):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="Already tracking a token in this chat. Use /stop to stop tracking first."
+                text=f"Already tracking {contract_address}. Use /stop to stop tracking first."
             )
             return
 
-        self.active_trackers[chat_id] = (network, contract_address)
+        # Validate interval
+        if interval not in [1, 5, 15, 30, 60]:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Invalid interval. Please use one of: 1, 5, 15, 30, 60 minutes."
+            )
+            return
+
+        # Add new token to tracking
+        self.active_trackers[chat_id].append((network, contract_address))
+        self.alert_intervals[chat_id][contract_address] = interval
         task = asyncio.create_task(
             self._track_price(chat_id, network, contract_address, context)
         )
-        self.tasks[chat_id] = task
+        self.tasks[chat_id].append(task)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Started tracking {contract_address} on {network} with {interval} minute interval."
+        )
 
-    async def stop_tracking(self, chat_id: int):
-        if chat_id in self.active_trackers:
-            if chat_id in self.tasks:
-                self.tasks[chat_id].cancel()
-                del self.tasks[chat_id]
-            if chat_id in self.initial_prices:
-                del self.initial_prices[chat_id]
-            if chat_id in self.initial_fdv:
-                del self.initial_fdv[chat_id]
+    async def stop_tracking(self, chat_id: int, contract_address: str = None):
+        if chat_id not in self.active_trackers:
+            return False
+
+        if contract_address:
+            # Stop tracking specific token
+            token_index = next((i for i, (_, addr) in enumerate(self.active_trackers[chat_id]) 
+                              if addr == contract_address), None)
+            if token_index is not None:
+                self.tasks[chat_id][token_index].cancel()
+                del self.tasks[chat_id][token_index]
+                del self.active_trackers[chat_id][token_index]
+                if contract_address in self.initial_prices[chat_id]:
+                    del self.initial_prices[chat_id][contract_address]
+                if contract_address in self.initial_fdv[chat_id]:
+                    del self.initial_fdv[chat_id][contract_address]
+                if contract_address in self.alert_intervals[chat_id]:
+                    del self.alert_intervals[chat_id][contract_address]
+                
+                # Clean up if no more tokens
+                if not self.active_trackers[chat_id]:
+                    del self.active_trackers[chat_id]
+                    del self.tasks[chat_id]
+                    del self.initial_prices[chat_id]
+                    del self.initial_fdv[chat_id]
+                    del self.alert_intervals[chat_id]
+                return True
+        else:
+            # Stop tracking all tokens
+            for task in self.tasks[chat_id]:
+                task.cancel()
+            del self.tasks[chat_id]
             del self.active_trackers[chat_id]
+            del self.initial_prices[chat_id]
+            del self.initial_fdv[chat_id]
+            del self.alert_intervals[chat_id]
             return True
         return False
 
@@ -87,7 +137,6 @@ class PriceTracker:
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:
                             data = await response.json()
-                            print("API Response:", data)  # Debug print
                             
                             # Get token data
                             token_data = data.get("data", {})
@@ -99,18 +148,13 @@ class PriceTracker:
                             # Get first pool data from included array
                             included = data.get("included", [])
                             if included:
-                                pool_data = included[0]  # Get first pool
+                                pool_data = included[0]
                                 pool_attributes = pool_data.get("attributes", {})
                                 price_percentage_5m = pool_attributes.get("price_change_percentage", {}).get("m5")
                                 vol_5m = pool_attributes.get("volume_usd", {}).get("m5")
                             else:
                                 price_percentage_5m = None
                                 vol_5m = None
-                            
-                            print("Price:", price)  # Debug print
-                            print("FDV:", fdv)  # Debug print
-                            print("Vol 5m:", vol_5m)  # Debug print
-                            print("Price Percentage 5m:", price_percentage_5m)  # Debug print
                             
                             if price is not None:
                                 try:
@@ -122,8 +166,8 @@ class PriceTracker:
                                     
                                     # Store initial price and FDV on first message
                                     if is_first_message:
-                                        self.initial_prices[chat_id] = price_float
-                                        self.initial_fdv[chat_id] = fdv_float
+                                        self.initial_prices[chat_id][contract_address] = price_float
+                                        self.initial_fdv[chat_id][contract_address] = fdv_float
                                         is_first_message = False
                                     
                                     # Format numbers
@@ -138,8 +182,8 @@ class PriceTracker:
                                     percentage_str = escape_markdown(percentage_str)
                                     
                                     # Format initial price and FDV
-                                    initial_price = self.initial_prices.get(chat_id, price_float)
-                                    initial_fdv = self.initial_fdv.get(chat_id, fdv_float)
+                                    initial_price = self.initial_prices[chat_id].get(contract_address, price_float)
+                                    initial_fdv = self.initial_fdv[chat_id].get(contract_address, fdv_float)
                                     initial_price_str = escape_markdown(format_small_number(initial_price))
                                     initial_fdv_formatted = format_large_number(initial_fdv)
                                     initial_fdv_str = escape_markdown(f"${initial_fdv_formatted}")
@@ -165,32 +209,10 @@ class PriceTracker:
                                         parse_mode='MarkdownV2',
                                         disable_web_page_preview=True
                                     )
-                                except (ValueError, TypeError):
-                                    # If conversion fails, send raw price
-                                    price_str = escape_markdown(f"${price}")
-                                    fdv_str = escape_markdown(f"${fdv}")
-                                    vol_5m_str = escape_markdown(f"${vol_5m}")
-                                    network_str = escape_markdown(network)
-                                    token_name_str = escape_markdown(token_name)
-                                    contract_str = escape_markdown(contract_address)
-                                    time_str = escape_markdown(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                                    
-                                    message = (
-                                        f"*{token_name_str}*\n"
-                                        f"💵 *Price: {price_str} {percentage_str}*\n"
-                                        f"🚀 *FDV: {fdv_str}*\n"
-                                        f"🌊 *Vol 5m: {vol_5m_str}*\n\n"
-                                        f"⏰ *Track Start Price: ${initial_price_str}*\n"
-                                        f"*FDV: {initial_fdv_str}*\n\n"
-                                        f"✉️ *Contract:* `{contract_str}`\n\n"
-                                        f"📈 [View Charts](https://www.geckoterminal.com/{network}/pools/{contract_address})\n"
-                                        
-                                    )
+                                except (ValueError, TypeError) as e:
                                     await context.bot.send_message(
-                                        chat_id=chat_id, 
-                                        text=message,
-                                        parse_mode='MarkdownV2',
-                                        disable_web_page_preview=True
+                                        chat_id=chat_id,
+                                        text=f"Error formatting data for {contract_address}: {str(e)}"
                                     )
                             else:
                                 await context.bot.send_message(
@@ -208,7 +230,8 @@ class PriceTracker:
                     text=f"Error tracking {contract_address}: {str(e)}"
                 )
             
-            await asyncio.sleep(60)  # Wait for 1 minute
+            # Use token-specific interval
+            await asyncio.sleep(self.alert_intervals[chat_id][contract_address] * 60)  # Convert minutes to seconds
 
 # Initialize price tracker
 price_tracker = PriceTracker()
@@ -216,16 +239,18 @@ price_tracker = PriceTracker()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Crypto Price Tracker Bot!\n"
-        "Use /track <network> <contract_address> to start tracking a token\n"
-        "Use /stop to stop tracking\n"
-        "Example: /track solana 0x123..."
+        "Use /track <network> <contract_address> [interval] to start tracking a token\n"
+        "Use /stop [contract_address] to stop tracking\n"
+        "Example: /track solana 0x123... 5\n"
+        "Interval options: 1, 5, 15, 30, 60 minutes"
     )
 
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
-            "Please provide network and address: /track <network> <contract_address>\n"
-            "Example: /track solana 0x123..."
+            "Please provide network and address: /track <network> <contract_address> [interval]\n"
+            "Example: /track solana 0x123... 5\n"
+            "Interval options: 1, 5, 15, 30, 60 minutes"
         )
         return
     
@@ -233,22 +258,30 @@ async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         network = context.args[0]
         address = context.args[1]
+        interval = int(context.args[2]) if len(context.args) > 2 else 1  # Default to 1 minute if not specified
         
-        chat_id = update.effective_chat.id  # Use chat_id instead of user_id
-        await price_tracker.start_tracking(chat_id, network, address, context)
-        await update.message.reply_text(f"Started tracking price for {address} on {network}")
+        chat_id = update.effective_chat.id
+        await price_tracker.start_tracking(chat_id, network, address, interval, context)
         
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid interval. Please use one of: 1, 5, 15, 30, 60 minutes."
+        )
     except Exception as e:
         await update.message.reply_text(
-            "Invalid format. Please use: /track <network> <contract_address>\n"
-            "Example: /track solana 0x123..."
+            "Invalid format. Please use: /track <network> <contract_address> [interval]\n"
+            "Example: /track solana 0x123... 5"
         )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id  # Use chat_id instead of user_id
+    chat_id = update.effective_chat.id
+    contract_address = context.args[0] if context.args else None
     
-    if await price_tracker.stop_tracking(chat_id):
-        await update.message.reply_text("Stopped tracking token")
+    if await price_tracker.stop_tracking(chat_id, contract_address):
+        if contract_address:
+            await update.message.reply_text(f"Stopped tracking {contract_address}")
+        else:
+            await update.message.reply_text("Stopped tracking all tokens")
     else:
         await update.message.reply_text("Not tracking any token in this chat")
 
